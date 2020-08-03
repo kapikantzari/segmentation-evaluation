@@ -1,121 +1,19 @@
 ################################################################################
 ##                      Eyeball Segmentation Evaluation                       ##
-##  Compute the performance metrics (dice coefficient, intersection over      ##
-##  union, Matthew's correlation coefficient, and accuracy, Hausdorff         ##
-##  ) between the computer segmentation results and radiologist segmentation  ##
-##  results. Visualize the results on the original CT scan and export both    ##
-##  numerical result and overlaid image file to a customized location.        ##
+##  Compute specified performance metrics (only support dice coefficient,     ##
+##  intersection over union, Matthew's correlation coefficient,accuracy,      ##
+##  and Hausdorff distance) between the computer segmentation results and     ##
+##  radiologist segmentation results. Visualize the results on the original   ##
+##  CT scan and export both numerical result and overlaid image file to a     ##
+##  customized location.                                                      ##
 ################################################################################
+
 
 import SimpleITK as sitk
 import numpy as np
 import os
 import cv2
 import pandas as pd
-
-import matplotlib.pyplot as plt
-
-from enum import Enum
-
-
-# Use enumerations to represent the various evaluation measures
-class PerformanceMetrics(Enum):
-    dice, iou, mcc, acc, hausdorff_distance = range(5)
-
-def performance_evaluation_file(computer_img, radiologist_img):
-    """
-    Compute the performance metrics for two image files.
-    """
-
-    results = np.zeros((1, len(PerformanceMetrics.__members__.items())))
-
-    # Compute the performance metrics
-    overlap_measures_filter = sitk.LabelOverlapMeasuresImageFilter()
-    hausdorff_distance_filter = sitk.HausdorffDistanceImageFilter()
-    overlap_measures_filter.Execute(computer_img, radiologist_img)
-    results[0, PerformanceMetrics.dice.value] = overlap_measures_filter.GetDiceCoefficient()
-    results[0, PerformanceMetrics.iou.value] = overlap_measures_filter.GetJaccardCoefficient()
-
-    # Tp-true positive, Tn-true negative, Fp-false positive, Fn-false negative
-    Fp = overlap_measures_filter.GetFalsePositiveError()
-    Tn = 1 - Fp
-    Fn = overlap_measures_filter.GetFalseNegativeError()
-    Tp = 1 - Fn
-    results[0, PerformanceMetrics.mcc.value] = (
-    Tp * Tn - Fp * Fn) / np.sqrt((Tp + Fp) * (Tp + Fn) * (Tn + Fp) * (Tn + Fn))
-    results[0, PerformanceMetrics.acc.value] = (Tp + Tn) / (Tp + Fp + Tn + Fn)
-
-    hausdorff_distance_filter.Execute(computer_img, radiologist_img)
-    results[0, PerformanceMetrics.hausdorff_distance.value] = hausdorff_distance_filter.GetHausdorffDistance()
-
-    return results
-
-
-def performance_evaluation_folder(images, export_path):
-    """
-    Compute performance metrics for corresponding image files in two folders.
-    """
-
-    results = np.zeros((1, len(PerformanceMetrics.__members__.items())))
-    files = []
-
-    for computer_img, radiologist_img, CT_img, file in images:
-        files.append(file)
-        results = np.concatenate((results, performance_evaluation_file(
-            computer_img, radiologist_img)), axis=0)
-        
-    results = np.delete(results, 0, 0)
-
-    visualize_performance_metrics(results, files, export_path)
-
-
-def visualize_performance_metrics(results, files, export_path):
-    # Graft result matrix into pandas data frames
-    results_df = pd.DataFrame(data=results, index=files, 
-                              columns=[name for name, _ in 
-                              PerformanceMetrics.__members__.items()])
-    results_df.plot(kind='bar').legend(bbox_to_anchor=(1.6, 0.9))
-    results_df.to_csv(export_path + '/result.csv')
-
-
-def visualize_segmentation(file, export_path, slice_number, CT_image, computer_seg, radiologist_seg, window_min, window_max):
-    """
-    Export a CT slice (in png) with both computerized (green) and radiologist 
-    (red) segmented contours overlaid onto it. The contours are the edges of 
-    the labeled regions.
-    """
-
-    CT_img = CT_image[:, :, slice_number]
-    computer_img = computer_seg[:, :, slice_number]
-    radiologist_img = radiologist_seg[:, :, slice_number]
-
-    # Impose computerized contour on the CT slice
-    computer_overlay = sitk.LabelMapContourOverlay(
-        sitk.Cast(computer_img, sitk.sitkLabelUInt8),
-        sitk.Cast(sitk.IntensityWindowing(CT_img, windowMinimum=window_min, 
-        windowMaximum=window_max), sitk.sitkUInt8),
-        opacity=1, contourThickness=[2, 2])
-    outputName = export_path + "/" + file + \
-        "_slice" + str(slice_number) + "_result.png"
-    output_radiologist = export_path + file + "_radio.png"
-    sitk.WriteImage(computer_overlay, outputName)
-    sitk.WriteImage(radiologist_img, output_radiologist)
-
-    # Impose radiologist contour on the CT slice
-    radiologist_img = cv2.imread(output_radiologist, cv2.IMREAD_GRAYSCALE)
-    result_overlay = cv2.imread(outputName)
-    contours, _ = cv2.findContours(radiologist_img, cv2.RETR_EXTERNAL, 
-        cv2.CHAIN_APPROX_NONE)
-
-    for i, c in enumerate(contours):
-        mask = np.zeros(radiologist_img.shape, np.uint8)
-        cv2.drawContours(mask, [c], -1, 255, -1)
-        mean, _, _, _ = cv2.mean(radiologist_img, mask=mask)
-        # Outline contour in that colour on main image, line thickness=1
-        cv2.drawContours(result_overlay, [c], -1, (0, 0, 255), 1)
-
-    cv2.imwrite(outputName, result_overlay)
-    os.remove(output_radiologist)
 
 
 def get_filename(file1, file2):
@@ -130,112 +28,216 @@ def get_filename(file1, file2):
     j = 0
     i = 0
 
-    while(i <= n1 - 1 and j <= n2 - 1):
+    while (i <= n1 - 1 and j <= n2 - 1):
         if (file1[i] != file2[j]):
             break
         result += (file1[i])
         i += 1
         j += 1
 
-    return (result)
+    return result
 
 
-def read_folder(computer_files, radiologist_files, CT_files):
+def read_folder(folder_path):
+    file_paths = []
+    for file in os.listdir(folder_path):
+        file_path = os.path.join(folder_path, file)
+        if (os.path.isfile(file_path)):
+            file_paths.append(file_path)
+    list.sort(file_paths)
 
     images = []
+    for path in file_paths:
+        images.append(sitk.ReadImage(path))
 
-    while (len(computer_files) != 1 and len(radiologist_files) != 1 and len(CT_files) != 1):
-        computer_file = computer_files.pop()
-        radiologist_file = radiologist_files.pop()
-        CT_file = CT_files.pop()
-
-        computer_image = sitk.ReadImage(computer_file)
-        radiologist_image = sitk.ReadImage(radiologist_file)
-        CT_image = sitk.ReadImage(CT_file)
-        file = get_filename(os.path.split(computer_file)[
-                            1], os.path.split(radiologist_file)[1])
-
-        images.append(
-            (computer_image, radiologist_image, CT_image, file))
-
-    return images
+    return (file_paths, images)
 
 
-def file_comparison(computer_image, radiologist_image, CT_image, file, export_path, slice_number, mode):
+def get_images_filename(mode, comp_path, radio_path):
+    filename = []
+    if (mode == 0):
+        if (os.path.isfile(comp_path) and os.path.isfile(radio_path)):
+            comp_img = [sitk.ReadImage(comp_path)]
+            radio_img = [sitk.ReadImage(radio_path)]
+            filename.append(get_filename(os.path.split(
+                comp_path)[1], os.path.split(radio_path)[1]))
+        else:
+            exit("Invalid file!")
+    else:
+        if (os.path.isdir(comp_path) and os.path.isdir(radio_path)):
+            (comp_file_paths, comp_img) = read_folder(comp_path)
+            (radio_file_paths, radio_img) = read_folder(radio_path)
+            if (len(comp_img) != len(radio_img)):
+                exit("Numbers of files in folders are unmatched!")
+            for i in range(len(comp_file_paths)):
+                filename.append(get_filename(os.path.split(comp_file_paths[i])[
+                                1], os.path.split(radio_file_paths[i])[1]))
+        else:
+            exit("Invalid directory!")
 
-    visualize_segmentation(file, export_path, slice_number, CT_image=CT_image,  
-            computer_seg=computer_image, radiologist_seg=radiologist_image,
-            window_min=-1024, window_max=976)
-
-    if (mode == 1):
-        results = performance_evaluation_file(computer_image, radiologist_image)
-        visualize_performance_metrics(results, [file], export_path)
+    return (comp_img, radio_img, filename)
 
 
-def folder_comparison(computer_folder, radiologist_folder, CT_folder, export_path, mode):
+def valid_input_perform_eval(metrics_input):
+    """
+    Check the validity of the input for computing performance metrics.
+    """
+
+    if (len(metrics_input) == 0):
+        return None
+    else:
+        metrics = {"acc": 0, "dice":1, "hausdorff":2, "iou":3, "mcc":4}
+        metrics_indicator = [0, 0, 0, 0, 0]
+        for metric in metrics_input:
+            if (metric in metrics):
+                metrics_indicator[metrics[metric]] = 1
+            else:
+                return None
+        return metrics_indicator
+
+
+def valid_input_visualize_seg(mode, file_number, CT_path):
+    """
+    Check the validity of the input for visualizing segmentation.
+    """
+
+    CT_image = []
+
+    if (mode == 0):
+        if (os.path.isfile(CT_path)):
+            CT_image = [sitk.ReadImage(CT_path)]
+        else:
+            print("Invalid file!")
+            return None
+    else:
+        if (os.path.isdir(CT_path)):
+            (_, CT_image) = read_folder(CT_path)
+            if (len(CT_image) != file_number):
+                print("Unmatched number of CT images!")
+                return None
+        else:
+            print("Invalid directory!")
+            return None
+    return CT_image
     
-    computer_files = []
-    for file in os.listdir(computer_folder):
-        computer_file = os.path.join(computer_folder, file)
-        if (os.path.isfile(computer_file)):
-            computer_files.append(computer_file)
-    list.sort(computer_files)
 
-    radiologist_files = []
-    for file in os.listdir(radiologist_folder):
-        radiologist_file = os.path.join(radiologist_folder, file)
-        if (os.path.isfile(radiologist_file)):
-            radiologist_files.append(radiologist_file)
-    list.sort(radiologist_files)
+def get_slice(filename):
+    slice_number = []
+    for file in filename:
+        slice_number.append(int(input(
+            "Enter the slice number for {}: ".format(file))))
+    return slice_number
 
-    CT_files = []
-    for file in os.listdir(CT_folder):
-        CT_file = os.path.join(CT_folder, file)
-        if (os.path.isfile(CT_file)):
-            CT_files.append(CT_file)
-    list.sort(CT_files)
 
-    images = read_folder(computer_files, radiologist_files, CT_files)
+class EyeballSegEval(object):
+    def __init__(self, mode, comp_path, radio_path, export_path):
+        self.mode = mode
+        self.comp_path = comp_path
+        self.radio_path = radio_path
+        self.export_path = export_path
+        (self.comp_img, self.radio_img, self.filename) = get_images_filename(
+            self.mode, self.comp_path, self.radio_path)
 
-    performance_evaluation_folder(images, export_path)
+            
+    def performance_evaluation(self, metrics):
+        """
+        Given a list of performance metrics, compute for the image files.
+        """
+
+        metrics_indicator = valid_input_perform_eval(metrics)
+        if (metrics_indicator == None):
+            print("Invalid metrics!")
+            return
+        else:
+            results = np.zeros((len(self.comp_img), len(metrics)))
+            overlap_measures_filter = sitk.LabelOverlapMeasuresImageFilter()
+            hausdorff_distance_filter = sitk.HausdorffDistanceImageFilter()
+
+            for i in range(len(self.comp_img)):
+                # Cannot compute for unmatched image files
+                if (self.comp_img[i].GetSpacing() != self.radio_img[i].GetSpacing()):
+                    print(
+                        "Spacing of corresponding image files ({}) don't match!".format(self.filename[i]))
+                    results[i] = [float("NaN")] * len(metrics)
+                else: 
+                    overlap_measures_filter.Execute(
+                        self.comp_img[i], self.radio_img[i])
+                    Fp = overlap_measures_filter.GetFalsePositiveError()
+                    Tn = 1 - Fp
+                    Fn = overlap_measures_filter.GetFalseNegativeError()
+                    Tp = 1 - Fn
+                    if (metrics_indicator[1]):
+                        results[i, 1] = overlap_measures_filter.GetDiceCoefficient()
+                    if (metrics_indicator[3]):
+                        results[i, 3] = overlap_measures_filter.GetJaccardCoefficient()
+                    if (metrics_indicator[4]):
+                        results[i, 4] = (
+                            Tp * Tn - Fp * Fn) / np.sqrt((Tp + Fp) * (Tp + Fn) * (Tn + Fp) * (Tn + Fn))
+                    if (metrics_indicator[0]):
+                        results[i, 0] = (Tp + Tn) / (Tp + Fp + Tn + Fn)
+                    hausdorff_distance_filter.Execute(
+                        self.comp_img[i], self.radio_img[i])
+                    if (metrics_indicator[2]):
+                        results[i, 2] = hausdorff_distance_filter.GetHausdorffDistance()
+            
+            results_df = pd.DataFrame(
+                data=results, index=self.filename, columns=sorted(metrics))
+            results_df.to_csv(self.export_path + '/results.csv')
+
     
-    for computer_image, radiologist_image, CT_image, file in images:
-        slice_input = "Enter the slice number for " + computer_file + ": "
-        slice_number = int(input(slice_input))
-        if (slice_number >= CT_image.GetSize()[2]):
-            print("Slice number out of bound!")
+    def visualize_segmentation(self, CT_path, window_min=-1024, window_max=976):
+        """
+        Given a slice number for each image comparison, export a CT slice (in 
+        png) with both computerized (green) and radiologist (red) segmented 
+        contours overlaid. The contours are the edges of the labeled regions.
+        """
 
-        file_comparison(computer_image, radiologist_image,
-                        CT_image, file, export_path, slice_number, mode)
-        
+        CT_image = valid_input_visualize_seg(
+            self.mode, len(self.comp_img), CT_path)
+        if (CT_image == None):
+            return
+        else:
+            slice_number = get_slice(self.filename)
+            for i in range(len(CT_image)):
+                computer = self.comp_img[i][:, :, slice_number[i]]
+                radiologist = self.radio_img[i][:, :, slice_number[i]]
+                CT = CT_image[i][:, :, slice_number[i]]
 
-def main():
-    mode = int(input(
-        "Enter 1 to compare two image files, 2 to compare image files in two folders (File names must match): "))
+                # Impose computerized contour on the CT slice
+                computer_overlay = sitk.LabelMapContourOverlay(sitk.Cast(computer, sitk.sitkLabelUInt8), sitk.Cast(sitk.IntensityWindowing(
+                    CT, windowMinimum=window_min, windowMaximum=window_max), sitk.sitkUInt8), opacity=1, contourThickness=[2, 2])
+                outputName = self.export_path + "/" + \
+                    self.filename[i] + "_slice" + \
+                    str(slice_number[i]) + "_result.png"
+                output_radio = self.export_path + \
+                    self.filename[i] + "_radio.png"
+                sitk.WriteImage(computer_overlay, outputName)
+                sitk.WriteImage(radiologist, output_radio)
 
-    if (mode == 1):
-        computer_file = input("Enter the path for computer image file: ")
-        computer_image = sitk.ReadImage(computer_file)
-        radiologist_file = input("Enter the path for radiologist image file: ")
-        radiologist_image = sitk.ReadImage(radiologist_file)
-        CT_file = input("Enter the path for CT image file: ")
-        CT_image = sitk.ReadImage(CT_file)
-        export_path = input("Enter the path for storing the export image: ")
-        slice_number = int(input("Enter the slice number: "))
-        file = get_filename(os.path.split(computer_file)[
-            1], os.path.split(radiologist_file)[1])
-        file_comparison(computer_image, radiologist_image,
-                        CT_image, file, export_path, slice_number, mode)
-    else: 
-        computer_folder = input(
-            "Enter the path for the folder of computer images: ")
-        radiologist_folder = input(
-            "Enter the path for the folder of radiologist images: ")
-        CT_folder = input("Enter the path for the folder of CT images: ")
-        export_path = input("Enter the path for storing the export image: ")
-        folder_comparison(computer_folder, radiologist_folder,
-                         CT_folder, export_path, mode)
+                # Impose radiologist contour on the CT slice
+                radiologist = cv2.imread(output_radio, cv2.IMREAD_GRAYSCALE)
+                result_overlay = cv2.imread(outputName)
+                contours, _ = cv2.findContours(
+                    radiologist, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+                for i, c in enumerate(contours):
+                    mask = np.zeros(radiologist.shape, np.uint8)
+                    cv2.drawContours(mask, [c], -1, 255, -1)
+                    mean, _, _, _ = cv2.mean(radiologist, mask=mask)
+                    cv2.drawContours(result_overlay, [c], -1, (0, 0, 255), 1)
+                cv2.imwrite(outputName, result_overlay)
+                os.remove(output_radio)
+            
 
+if __name__ == "__main__":
+    test1 = EyeballSegEval(
+        0, "/Users/catherine/Desktop/Research/eyeball-segmentation-evaluation/eyeball-computer-results/HB039124OAV_00351_2015-07-13_4_img.nii", "/Users/catherine/Desktop/Research/eyeball-segmentation-evaluation/msk-eyeball-radiologist-results/HB039124OAV_00351_2015-07-13_4_msk.nii", "/Users/catherine/Desktop/Research/eyeball-segmentation-evaluation/results")
+    test1.performance_evaluation(["dice", "acc", "hausdorff"])
+    test1.visualize_segmentation(
+        "/Users/catherine/Desktop/Research/eyeball-segmentation-evaluation/img-eyeball/HB039124OAV_00351_2015-07-13_4_img.nii")
 
-if __name__ == '__main__':
-    main()
+    test2 = EyeballSegEval(
+        1, "/Users/catherine/Desktop/Research/eyeball-segmentation-evaluation/eyeball-computer-results", "/Users/catherine/Desktop/Research/eyeball-segmentation-evaluation/msk-eyeball-radiologist-results", "/Users/catherine/Desktop/Research/eyeball-segmentation-evaluation/results")
+    test2.performance_evaluation(["dice", "acc", "hausdorff", "mcc", "iou"])
+    test2.visualize_segmentation(
+        "/Users/catherine/Desktop/Research/eyeball-segmentation-evaluation/img-eyeball")
+
