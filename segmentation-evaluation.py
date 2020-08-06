@@ -1,5 +1,5 @@
 ################################################################################
-##                      Eyeball Segmentation Evaluation                       ##
+##                          Segmentation Evaluation                           ##
 ##  Compute specified performance metrics (only support dice coefficient,     ##
 ##  intersection over union, Matthew's correlation coefficient,accuracy,      ##
 ##  and Hausdorff distance) between the computer segmentation results and     ##
