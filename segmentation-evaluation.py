@@ -2,10 +2,10 @@
 ##                          Segmentation Evaluation                           ##
 ##  Compute specified performance metrics (only support dice coefficient,     ##
 ##  intersection over union, Matthew's correlation coefficient,accuracy,      ##
-##  and Hausdorff distance) between the computer segmentation results and     ##
-##  radiologist segmentation results. Visualize the results on the original   ##
-##  CT scan and export both numerical result and overlaid image file to a     ##
-##  customized location.                                                      ##
+##  Hausdorff distance, sensitivity, precision, and F measure) between the    ##
+##  computer segmentation results and radiologist segmentation results.       ##
+##  Visualize the results on the original CT scan and export both numerical   ##
+##  result and overlaid image file to a customized location.                  ##
 ################################################################################
 
 
@@ -15,6 +15,7 @@ import os
 import cv2
 import pandas as pd
 
+from collections import OrderedDict
 
 
 class SegEval(object):
@@ -71,8 +72,7 @@ class SegEval(object):
         if (os.path.isfile(comp_path) and os.path.isfile(radio_path)):
             comp_img = sitk.ReadImage(comp_path)
             radio_img = sitk.ReadImage(radio_path)
-            filename = [self.__get_filename(os.path.split(comp_path)[
-                1], os.path.split(radio_path)[1])]
+            filename = [self.__get_filename(os.path.split(comp_path)[1], os.path.split(radio_path)[1])]
             return (comp_img, radio_img, filename)
         else:
             exit("Invalid file!")
@@ -86,8 +86,7 @@ class SegEval(object):
             if (len(comp_img) != len(radio_img)):
                 exit("Numbers of files in folders are unmatched!")
             for i in range(len(comp_file_paths)):
-                filename.append(self.__get_filename(os.path.split(
-                    comp_file_paths[i])[1], os.path.split(radio_file_paths[i])[1]))
+                filename.append(self.__get_filename(os.path.split(comp_file_paths[i])[1], os.path.split(radio_file_paths[i])[1]))
             return (comp_img, radio_img, filename)
         else:
             exit("Invalid directory!")
@@ -105,23 +104,24 @@ class SegEval(object):
         if (len(metrics_input) == 0):
             return None
         else:
-            metrics = {"acc": 0, "dice": 1, "hausdorff": 2, "iou": 3, "mcc": 4}
-            metrics_indicator = [0, 0, 0, 0, 0]
+            metrics = {"acc", "dice", "hausdorff", "iou", "mcc", "sensitivity", "precision", "F measure"}
+            metrics_dict = OrderedDict()
             for metric in metrics_input:
                 if (metric in metrics):
-                    metrics_indicator[metrics[metric]] = 1
+                    metrics_dict[metric] = 0
                 else:
                     return None
-            return metrics_indicator
+            return metrics_dict
 
 
     def __valid_eval_img(self, img1, img2, filename):
-        if (img1.GetSpacing() != img2.GetSpacing()):
-            print(
-                "Spacing of corresponding image files ({}) don't match!".format(filename))
+        if not (np.count_nonzero(sitk.GetArrayFromImage(img1)) and np.count_nonzero(sitk.GetArrayFromImage(img2))):
+            print("One or more image is empty!")
             return False
-        else:
-            return True
+        elif (img1.GetSpacing() != img2.GetSpacing()):
+            print("Spacing of corresponding image files ({}) don't match!".format(filename))
+            return False
+        else: return True
 
 
     def __get_sens_spec(self, img1, img2):
@@ -150,10 +150,12 @@ class SegEval(object):
 
     def __get_acc(self, img1, img2, filename):
         if (self.__valid_eval_img(img1, img2, filename)):
-            overlap_measures_filter = sitk.LabelOverlapMeasuresImageFilter()
-            overlap_measures_filter.Execute(img1, img2)
             (Tp, Fp, Tn, Fn) = self.__get_sens_spec(img1, img2)
-            return (Tp + Tn) / (Tp + Fp + Tn + Fn)
+            if (Tp + Fp + Tn + Fn == 0): 
+                print("Attempt to divide by zero in calculating acc for {}!".format(filename))
+                return float("NaN")
+            else: 
+                return (Tp + Tn) / (Tp + Fp + Tn + Fn)
 
 
     def __get_hausdorff(self, img1, img2, filename):
@@ -165,34 +167,74 @@ class SegEval(object):
 
     def __get_mcc(self, img1, img2, filename):
         if (self.__valid_eval_img(img1, img2, filename)):
-            overlap_measures_filter = sitk.LabelOverlapMeasuresImageFilter()
-            overlap_measures_filter.Execute(img1, img2)
             (Tp, Fp, Tn, Fn) = self.__get_sens_spec(img1, img2)
-            return (Tp * Tn - Fp * Fn) / np.sqrt((Tp + Fp) * (Tp + Fn) * (Tn + Fp) * (Tn + Fn))
+            if ((Tp + Fp) * (Tp + Fn) * (Tn + Fp) * (Tn + Fn) <= 0): 
+                print("Attempt to square root of negative number or divide by zero in calculating mcc for {}!".format(filename))
+                return float("NaN")
+            else: 
+                return (Tp * Tn - Fp * Fn) / np.sqrt((Tp + Fp) * (Tp + Fn) * (Tn + Fp) * (Tn + Fn))
 
-
-    def __evaluation_by_img(self, img1, img2, filename, metrics):
-        metrics_indicator = self.__valid_metrics(metrics)
-        if (metrics_indicator == None):
-            print("Invalid metrics!")
-            return
-        else:
-            results = []
-            # Cannot compute for unmatched image files
-            if not (self.__valid_eval_img(img1, img2, filename)):
-                results = [float("NaN")] * len(metrics)
+    
+    def __get_sensitivity(self, img1, img2, filename):
+        if (self.__valid_eval_img(img1, img2, filename)):
+            (Tp, _, _, Fn) = self.__get_sens_spec(img1, img2)
+            if (Tp + Fn == 0):
+                print("Attempt to divide by zero in calculating sensitivity for {}!".format(filename))
+                return float("NaN")
             else:
-                if (metrics_indicator[0]):
-                    results.append(self.__get_acc(img1, img2, filename))
-                if (metrics_indicator[1]):
-                    results.append(self.__get_dice(img1, img2, filename))
-                if (metrics_indicator[2]):
-                    results.append(self.__get_hausdorff(img1, img2, filename))
-                if (metrics_indicator[3]):
-                    results.append(self.__get_iou(img1, img2, filename))
-                if (metrics_indicator[4]):
-                    results.append(self.__get_mcc(img1, img2, filename))
-            return results
+                return Tp / (Tp + Fn)
+
+
+    def __get_precision(self, img1, img2, filename):
+        if (self.__valid_eval_img(img1, img2, filename)):
+            (Tp, Fp, _, _) = self.__get_sens_spec(img1, img2)
+            if (Tp + Fp == 0):
+                print("Attempt to divide by zero in calculating precision for {}!".format(filename))
+                return float("NaN")
+            else:
+                return Tp / (Tp + Fp)
+
+
+    def __get_F_measure(self, img1, img2, filename):
+        if (self.__valid_eval_img(img1, img2, filename)):
+            (Tp, Fp, _, Fn) = self.__get_sens_spec(img1, img2)
+            if (2 * Tp + Fp + Fn == 0):
+                print("Attempt to divide by zero in calculating F measure for {}!".format(filename))
+                return float("NaN")
+            else:
+                return (2 * Tp) / (2 * Tp + Fp + Fn)
+
+
+    def __evaluation_by_img(self, img1, img2, filename, metrics, metrics_dict):
+        results_metric = []
+        results_value = []
+        # Cannot compute for unmatched image files
+        if not (self.__valid_eval_img(img1, img2, filename)):
+            results_value = [float("NaN")] * len(metrics)
+            for metric in metrics_dict:
+                results_metric.append(metric)
+        else:
+            if ("acc" in metrics_dict):
+                metrics_dict["acc"] = self.__get_acc(img1, img2, filename)
+            if ("dice" in metrics_dict):
+                metrics_dict["dice"] = self.__get_dice(img1, img2, filename)
+            if ("hausdorff" in metrics_dict):
+                metrics_dict["hausdorff"] = self.__get_hausdorff(
+                    img1, img2, filename)
+            if ("iou" in metrics_dict):
+                metrics_dict["iou"] = self.__get_iou(img1, img2, filename)
+            if ("mcc" in metrics_dict):
+                metrics_dict["mcc"] = self.__get_mcc(img1, img2, filename)
+            if ("sensitivity" in metrics_dict):
+                metrics_dict["sensitivity"] = self.__get_sensitivity(img1, img2, filename)
+            if ("precision" in metrics_dict):
+                metrics_dict["precision"] = self.__get_precision(img1, img2, filename)
+            if ("F measure" in metrics_dict):
+                metrics_dict["F measure"] = self.__get_F_measure(img1, img2, filename)
+            for metric in metrics_dict:
+                results_metric.append(metric)
+                results_value.append(metrics_dict[metric])
+        return (results_metric, results_value)
 
 
     ##################################
@@ -222,15 +264,13 @@ class SegEval(object):
 
 
     def __get_slice(self, filename):
-        slice_number = int(input(
-            "Enter the slice number for {}: ".format(filename)))
+        slice_number = int(input("Enter the slice number for {}: ".format(filename)))
         return slice_number
 
 
     def __first_overlay(self, computer, radiologist, CT, output_CT, output_radio, win_min=-1024, win_max=976):
         # Impose computerized contour on the CT slice
-        computer_overlay = sitk.LabelMapContourOverlay(sitk.Cast(computer, sitk.sitkLabelUInt8), sitk.Cast(sitk.IntensityWindowing(
-            CT, windowMinimum=win_min, windowMaximum=win_max), sitk.sitkUInt8), opacity=1, contourThickness=[2, 2])
+        computer_overlay = sitk.LabelMapContourOverlay(sitk.Cast(computer, sitk.sitkLabelUInt8), sitk.Cast(sitk.IntensityWindowing(CT, windowMinimum=win_min, windowMaximum=win_max), sitk.sitkUInt8), opacity=1, contourThickness=[2, 2])
         sitk.WriteImage(computer_overlay, output_CT)
         sitk.WriteImage(radiologist, output_radio)
 
@@ -239,8 +279,7 @@ class SegEval(object):
         # Impose radiologist contour on the CT slice
         radiologist = cv2.imread(output_radio, cv2.IMREAD_GRAYSCALE)
         result_overlay = cv2.imread(output_CT)
-        contours, _ = cv2.findContours(
-            radiologist, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+        contours, _ = cv2.findContours(radiologist, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
         for i, c in enumerate(contours):
             mask = np.zeros(radiologist.shape, np.uint8)
             cv2.drawContours(mask, [c], -1, 255, -1)
@@ -257,8 +296,7 @@ class SegEval(object):
         radiologist = radio_img[:, :, slice_number]
         CT = CT_img[:, :, slice_number]
 
-        output_CT = export_path + "/" + filename + \
-            "_slice" + str(slice_number) + "_CT.png"
+        output_CT = export_path + "/" + filename + "_slice" + str(slice_number) + "_CT.png"
         output_radio = export_path + filename + "_radio.png"
         self.__first_overlay(computer, radiologist, CT, output_CT, output_radio)
         result_overlay = self.__second_overlay(output_CT, output_radio)
@@ -276,12 +314,16 @@ class SegEval(object):
         """
 
         self.metrics = metrics
-        (self.comp_img, self.radio_img, self.filename) = self.__read_img_from_file(
-            self.comp_path, self.radio_path)
-        print("Evaluating {}".format(self.filename[0]), end=" ")
-        self.eval_results = [self.__evaluation_by_img(
-            self.comp_img, self.radio_img, self.filename[0], self.metrics)]
-        print("...... complete!")
+        metrics_dict = self.__valid_metrics(self.metrics)
+        if (metrics_dict == None):
+            print("Invalid metrics!")
+            return
+        else:
+            (self.comp_img, self.radio_img, self.filename) = self.__read_img_from_file(self.comp_path, self.radio_path)
+            print("Evaluating {}".format(self.filename[0]), end=" ")
+            (results_metric, results_value) = self.__evaluation_by_img(self.comp_img, self.radio_img, self.filename[0], self.metrics, metrics_dict)
+            self.eval_results = (results_metric, [results_value])
+            print("...... complete!")
 
 
     def evaluation_by_folder(self, metrics):
@@ -291,13 +333,20 @@ class SegEval(object):
         """
 
         self.metrics = metrics
-        (self.comp_img, self.radio_img, self.filename) = self.__read_img_from_folder(
-            self.comp_path, self.radio_path)
-        for i in range(len(self.comp_img)):
-            print("Evaluating {}".format(self.filename[i]), end=" ")
-            self.eval_results.append(self.__evaluation_by_img(
-                self.comp_img[i], self.radio_img[i], self.filename[i], self.metrics))
-            print("...... complete!")
+        metrics_dict = self.__valid_metrics(metrics)
+        if (metrics_dict == None):
+            print("Invalid metrics!")
+            return
+        else:
+            results_metric = []
+            results_values = []
+            (self.comp_img, self.radio_img, self.filename) = self.__read_img_from_folder(self.comp_path, self.radio_path)
+            for i in range(len(self.comp_img)):
+                print("Evaluating {}".format(self.filename[i]), end=" ")
+                (results_metric, results_value) = self.__evaluation_by_img(self.comp_img[i], self.radio_img[i], self.filename[i], self.metrics, metrics_dict)
+                results_values.append(results_value)
+                print("...... complete!")
+            self.eval_results = (results_metric, results_values)
 
 
     def export_eval_results(self, export_path):
@@ -305,8 +354,8 @@ class SegEval(object):
         Export the evaluation results (CSV) to a customized location.
         """
 
-        results_df = pd.DataFrame(
-            data=self.eval_results, index=self.filename, columns=sorted(self.metrics))
+        (results_metric, results_value) = self.eval_results
+        results_df = pd.DataFrame(data=results_value, index=self.filename, columns=results_metric)
         results_df.to_csv(export_path + '/results.csv')
         print("Evaluation results have been saved to {}!".format(export_path))
 
@@ -354,22 +403,18 @@ class SegEval(object):
 
 
 if __name__ == "__main__":
-    test1 = SegEval(
-        "/Users/catherine/Desktop/Research/eyeball-segmentation-evaluation/eyeball-computer-results/HB039124OAV_00351_2015-07-13_4_img.nii", "/Users/catherine/Desktop/Research/eyeball-segmentation-evaluation/msk-eyeball-radiologist-results/HB039124OAV_00351_2015-07-13_4_msk.nii")
+    test1 = SegEval("/Users/catherine/Desktop/Research/eyeball-segmentation-evaluation/eyeball-computer-results/HB039124OAV_00351_2015-07-13_4_img.nii", "/Users/catherine/Desktop/Research/eyeball-segmentation-evaluation/msk-eyeball-radiologist-results/HB039124OAV_00351_2015-07-13_4_msk.nii")
     test1.evaluation_by_file(["dice", "acc", "hausdorff"])
-    test1.export_eval_results(
-        "/Users/catherine/Desktop/Research/eyeball-segmentation-evaluation/results")
-    test1.visualize_file(
-        "/Users/catherine/Desktop/Research/eyeball-segmentation-evaluation/img-eyeball/HB039124OAV_00351_2015-07-13_4_img.nii")
-    test1.export_visual_results(
-        "/Users/catherine/Desktop/Research/eyeball-segmentation-evaluation/results")
+    test1.export_eval_results("/Users/catherine/Desktop/Research/eyeball-segmentation-evaluation/results")
+    test1.visualize_file("/Users/catherine/Desktop/Research/eyeball-segmentation-evaluation/img-eyeball/HB039124OAV_00351_2015-07-13_4_img.nii")
+    test1.export_visual_results("/Users/catherine/Desktop/Research/eyeball-segmentation-evaluation/results")
     
-    test2 = SegEval(
-        "/Users/catherine/Desktop/Research/eyeball-segmentation-evaluation/eyeball-computer-results", "/Users/catherine/Desktop/Research/eyeball-segmentation-evaluation/msk-eyeball-radiologist-results")
+    test2 = SegEval("/Users/catherine/Desktop/Research/eyeball-segmentation-evaluation/eyeball-computer-results", "/Users/catherine/Desktop/Research/eyeball-segmentation-evaluation/msk-eyeball-radiologist-results")
     test2.evaluation_by_folder(["dice", "acc", "hausdorff", "mcc", "iou"])
-    test2.export_eval_results(
-        "/Users/catherine/Desktop/Research/eyeball-segmentation-evaluation/results")
-    test2.visualize_folder(
-        "/Users/catherine/Desktop/Research/eyeball-segmentation-evaluation/img-eyeball")
-    test2.export_visual_results(
-        "/Users/catherine/Desktop/Research/eyeball-segmentation-evaluation/results")
+    test2.export_eval_results("/Users/catherine/Desktop/Research/eyeball-segmentation-evaluation/results")
+    test2.visualize_folder("/Users/catherine/Desktop/Research/eyeball-segmentation-evaluation/img-eyeball")
+    test2.export_visual_results("/Users/catherine/Desktop/Research/eyeball-segmentation-evaluation/results")
+
+    test3 = SegEval("/Users/catherine/Desktop/Research/eyeball-segmentation-evaluation/Test/abscess-final","/Users/catherine/Desktop/Research/eyeball-segmentation-evaluation/Test/msk-abscess")
+    test3.evaluation_by_folder(["acc", "hausdorff", "precision", "iou", "mcc", "F measure", "sensitivity", "dice"])
+    test3.export_eval_results("/Users/catherine/Desktop/Research/eyeball-segmentation-evaluation/results")
